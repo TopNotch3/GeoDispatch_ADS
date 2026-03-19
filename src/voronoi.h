@@ -51,6 +51,7 @@ void voronoi_insert_site(dcel_t* d, point_t new_site);
 // P4 exports (additions to voronoi.h)
 void clip_to_bbox(dcel_t* d, double xmin, double ymin, double xmax, double ymax);
 double cell_area(dcel_t* d, int face_id);
+void compute_all_areas(dcel_t* d); /* Added by P5 */
 int* flag_underserved(dcel_t* d, double threshold, int* out_count);
 
 #endif

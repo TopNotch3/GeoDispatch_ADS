@@ -33,7 +33,6 @@ class SetStateRequest(BaseModel):
     facility_id: int
     new_state: str = Field(..., pattern="^(online|offline|overloaded)$")
 
-
 # ── P1 — Ragini ───────────────────────────────────────────────
 
 @app.post("/query-nearest")
@@ -49,53 +48,40 @@ def query_knn(body: KNNRequest):
     results = gd.kd_knn(body.lat, body.lon, body.k)
     return {"k": body.k, "facilities": results}
 
-
-# ── P3 — Shakti ───────────────────────────────────────────────
-
-@app.get("/coverage-map")
-def coverage_map():
-    cells = gd.get_coverage_map() if hasattr(gd, "get_coverage_map") else []
-    features = []
-    for cell in cells:
-        polygon_coords = []
-        for x, y in cell.get("polygon", []):
-            lat = (y / 111320.0) + 18.5204
-            lon = (x / (math.cos(18.5204 * math.pi / 180.0) * 111320.0)) + 73.8567
-            polygon_coords.append([lon, lat])
-        feature = {
-            "type": "Feature",
-            "properties": {
-                "site_id": cell.get("site_id"),
-                "area": cell.get("area", 0),
-                "is_underserved": cell.get("is_underserved", 0),
-                "facility_name": cell.get("facility_name", f"Facility {cell.get('site_id')}")
-            },
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [polygon_coords]
-            }
-        }
-        features.append(feature)
-    return {"type": "FeatureCollection", "features": features}
-
-
 # ── P2 — Nikhil ───────────────────────────────────────────────
 
 @app.post("/optimise")
 def optimise(body: OptimiseRequest):
+    """
+    Run Lloyd's relaxation algorithm.
+    Returns per-iteration facility movements and a final recommendation.
+    """
     try:
         steps = gd.run_lloyds(body.iterations, body.convergence_threshold)
     except AttributeError:
-        raise HTTPException(status_code=501, detail="Lloyd's not yet available")
+        raise HTTPException(
+            status_code=501,
+            detail="Lloyd's algorithm not yet available (waiting for P5's algo.c)")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Optimisation failed: {e}")
+        raise HTTPException(status_code=500,
+                            detail=f"Lloyd's optimisation failed: {e}")
+
     if not steps:
-        return {"steps": [], "recommendation": None, "msg": "Already converged."}
-    return {"steps": steps, "recommendation": steps[-1].get("facility_movements", [])}
+        return {"steps": [], "recommendation": None,
+                "msg": "No movement — already converged."}
+
+    return {
+        "steps": steps,
+        "recommendation": steps[-1].get("facility_movements", []),
+    }
 
 
 @app.post("/set-state")
 def set_facility_state(body: SetStateRequest):
+    """
+    Transition a facility between online / offline / overloaded.
+    Syncs with C engine via state_manager -> geodispatch bridge.
+    """
     result = state_manager.set_state(body.facility_id, body.new_state)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["msg"])
@@ -104,12 +90,42 @@ def set_facility_state(body: SetStateRequest):
 
 @app.get("/facility-states")
 def facility_states():
+    """Return { facility_id: state } for all facilities."""
     return state_manager.get_all_states()
 
 
 @app.get("/live-facilities")
 def live_facilities():
+    """Return list of facility IDs that are currently online."""
     return {"ids": state_manager.get_live_facilities()}
 
 
-# ── Sachi, Sanat — add your endpoints below ───────────────────
+# ── P3 — Shakti / P5 — Sanat ───────────────────────────────────
+
+@app.get('/coverage-map')
+def coverage_map():
+    cells = gd.get_coverage_map() if hasattr(gd, 'get_coverage_map') else []
+    features = []
+    for cell in cells:
+        polygon_coords = []
+        for point in cell.get('polygon', []):
+            if len(point) == 2:
+                x, y = point
+            else:
+                x, y = point["x"], point["y"] 
+            # Original formula from Shakti's commit:
+            lat = (y / 111320.0) + 18.5204
+            lon = (x / (math.cos(18.5204 * math.pi / 180.0) * 111320.0)) + 73.8567
+            polygon_coords.append([lon, lat])
+        feature = {
+            "type": "Feature",
+            "properties": {
+                "site_id": cell.get('site_id'),
+                "area": cell.get('area', 0),
+                "is_underserved": cell.get('is_underserved', 0),
+                "facility_name": cell.get('facility_name', f"Facility {cell.get('site_id')}")
+            },
+            "geometry": {"type": "Polygon", "coordinates": [polygon_coords]}
+        }
+        features.append(feature)
+    return {"type": "FeatureCollection", "features": features}
