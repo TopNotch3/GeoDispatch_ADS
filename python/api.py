@@ -1,9 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import geodispatch as gd
+import state_manager
+import math
 
-app = FastAPI()
+app = FastAPI(title="GeoDispatch", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── P1 — Ragini ───────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
     lat: float
@@ -23,6 +25,16 @@ class KNNRequest(BaseModel):
     lon: float
     k: int = 3
 
+class OptimiseRequest(BaseModel):
+    iterations: int = Field(default=10, ge=1, le=200)
+    convergence_threshold: float = Field(default=50.0, ge=0.1)
+
+class SetStateRequest(BaseModel):
+    facility_id: int
+    new_state: str = Field(..., pattern="^(online|offline|overloaded)$")
+
+
+# ── P1 — Ragini ───────────────────────────────────────────────
 
 @app.post("/query-nearest")
 def query_nearest(body: QueryRequest):
@@ -39,27 +51,24 @@ def query_knn(body: KNNRequest):
 
 
 # ── P3 — Shakti ───────────────────────────────────────────────
-import math
 
-@app.get('/coverage-map')
+@app.get("/coverage-map")
 def coverage_map():
-    cells = gd.get_coverage_map() if hasattr(gd, 'get_coverage_map') else []
-    
+    cells = gd.get_coverage_map() if hasattr(gd, "get_coverage_map") else []
     features = []
     for cell in cells:
         polygon_coords = []
-        for x, y in cell.get('polygon', []):
+        for x, y in cell.get("polygon", []):
             lat = (y / 111320.0) + 18.5204
             lon = (x / (math.cos(18.5204 * math.pi / 180.0) * 111320.0)) + 73.8567
             polygon_coords.append([lon, lat])
-            
         feature = {
             "type": "Feature",
             "properties": {
-                "site_id": cell.get('site_id'),
-                "area": cell.get('area', 0),
-                "is_underserved": cell.get('is_underserved', 0),
-                "facility_name": cell.get('facility_name', f"Facility {cell.get('site_id')}")
+                "site_id": cell.get("site_id"),
+                "area": cell.get("area", 0),
+                "is_underserved": cell.get("is_underserved", 0),
+                "facility_name": cell.get("facility_name", f"Facility {cell.get('site_id')}")
             },
             "geometry": {
                 "type": "Polygon",
@@ -67,11 +76,40 @@ def coverage_map():
             }
         }
         features.append(feature)
-        
     return {"type": "FeatureCollection", "features": features}
 
 
-# ── other endpoints go below (Sachi, Sanat will add theirs) ───
+# ── P2 — Nikhil ───────────────────────────────────────────────
 
-##git add src/kd.h src/kd.c python/api.py
-##git commit -m "P1 complete: kd-tree build, NN, kNN, endpoints"
+@app.post("/optimise")
+def optimise(body: OptimiseRequest):
+    try:
+        steps = gd.run_lloyds(body.iterations, body.convergence_threshold)
+    except AttributeError:
+        raise HTTPException(status_code=501, detail="Lloyd's not yet available")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimisation failed: {e}")
+    if not steps:
+        return {"steps": [], "recommendation": None, "msg": "Already converged."}
+    return {"steps": steps, "recommendation": steps[-1].get("facility_movements", [])}
+
+
+@app.post("/set-state")
+def set_facility_state(body: SetStateRequest):
+    result = state_manager.set_state(body.facility_id, body.new_state)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["msg"])
+    return result
+
+
+@app.get("/facility-states")
+def facility_states():
+    return state_manager.get_all_states()
+
+
+@app.get("/live-facilities")
+def live_facilities():
+    return {"ids": state_manager.get_live_facilities()}
+
+
+# ── Sachi, Sanat — add your endpoints below ───────────────────
