@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "kd.h"
+#include "voronoi.h"
 
 int main() 
 {
@@ -32,6 +33,16 @@ int main()
                 i, neighbors[i].id, neighbors[i].x, neighbors[i].y);
     }
     free(neighbors);
+
+    // ── Task 4 test: voronoi_build ──
+    dcel_t *dcel = voronoi_build(pts, 4);
+    printf("voronoi_build output: %d vertices, %d edges, %d faces\n", dcel->nv, dcel->ne, dcel->nf);
+    
+    int nbr_count = 0;
+    face_t** nbrs = dcel_neighbours(dcel, 0, &nbr_count);
+    printf("dcel_neighbours for site 0: %d neighbours\n", nbr_count);
+    free(nbrs);
+    voronoi_free(dcel);
 
     kd_free(root);
     return 0;
